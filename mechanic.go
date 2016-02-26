@@ -9,11 +9,11 @@ import (
 	"os"
 	"strings"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/garyburd/go-oauth/oauth"
 	"github.com/itsabot/abot/shared/datatypes"
 	"github.com/itsabot/abot/shared/knowledge"
 	"github.com/itsabot/abot/shared/language"
+	"github.com/itsabot/abot/shared/log"
 	"github.com/itsabot/abot/shared/nlp"
 	"github.com/itsabot/abot/shared/pkg"
 	"github.com/jmoiron/sqlx"
@@ -46,15 +46,16 @@ var ErrNoBusinesses = errors.New("no businesses")
 var c client
 var p *pkg.Pkg
 var db *sqlx.DB
-var l *log.Entry
+var l *log.Logger
+
+const pkgName string = "mechanic"
 
 func main() {
 	var coreaddr string
 	flag.StringVar(&coreaddr, "coreaddr", "",
 		"Port used to communicate with Abot.")
 	flag.Parse()
-	l = log.WithFields(log.Fields{"pkg": "mechanic"})
-
+	l = log.New(pkgName)
 	c.client.Credentials.Token = os.Getenv("YELP_CONSUMER_KEY")
 	c.client.Credentials.Secret = os.Getenv("YELP_CONSUMER_SECRET")
 	c.token.Token = os.Getenv("YELP_TOKEN")
@@ -62,7 +63,7 @@ func main() {
 	var err error
 	db, err = pkg.ConnectDB()
 	if err != nil {
-		l.Fatalln(err)
+		l.Fatal(err)
 	}
 	trigger := &nlp.StructuredInput{
 		Commands: language.Join(
@@ -76,13 +77,13 @@ func main() {
 			language.AutomotiveBrands(),
 		),
 	}
-	p, err = pkg.NewPackage("mechanic", coreaddr, trigger)
+	p, err = pkg.NewPackage(pkgName, coreaddr, trigger)
 	if err != nil {
-		l.Fatalln("building", err)
+		l.Fatal("building", err)
 	}
 	mechanic := new(Mechanic)
 	if err := p.Register(mechanic); err != nil {
-		l.Fatalln("registering", err)
+		l.Fatal("registering", err)
 	}
 }
 
@@ -138,7 +139,7 @@ func (pt *Mechanic) Run(m *dt.Msg, resp *string) error {
 		m.State["location"] = loc.Name
 	}
 	if err := pt.searchYelp(m, resp); err != nil {
-		l.WithField("fn", "searchYelp").Errorln(err)
+		return err
 	}
 	return nil
 }
@@ -182,7 +183,7 @@ func (pt *Mechanic) FollowUp(m *dt.Msg, resp *string) error {
 			m.State["warranty"] = "yes"
 			m.State["preference"] = "dealer"
 			if err := pt.searchYelp(m, resp); err != nil {
-				l.WithField("fn", "searchYelp").Errorln(err)
+				return err
 			}
 		} else if language.No(warr) {
 			m.State["warranty"] = "no"
@@ -205,7 +206,7 @@ func (pt *Mechanic) FollowUp(m *dt.Msg, resp *string) error {
 		}
 		if m.State["preference"] != "" {
 			if err := pt.searchYelp(m, resp); err != nil {
-				l.WithField("fn", "searchYelp").Errorln(err)
+				return err
 			}
 		}
 		return nil
@@ -251,7 +252,7 @@ func (pt *Mechanic) FollowUp(m *dt.Msg, resp *string) error {
 		case "not", "else", "no", "anything", "something":
 			m.State["offset"] = float64(offI + 1)
 			if err := pt.searchYelp(m, resp); err != nil {
-				l.WithField("fn", "searchYelp").Errorln(err)
+				return err
 			}
 		// TODO perhaps handle this case and "thanks" at the Abot level?
 		// with bayesian classification
@@ -306,7 +307,6 @@ func (c *client) get(urlStr string, params url.Values, v interface{}) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		l.WithField("fn", "get").Errorln(resp)
 		return fmt.Errorf("yelp status %d", resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(v)
@@ -323,11 +323,7 @@ func (pt *Mechanic) searchYelp(m *dt.Msg, resp *string) error {
 	} else {
 		q = fmt.Sprintf("%s mechanic", q)
 	}
-	l.WithFields(log.Fields{
-		"q":      q,
-		"loc":    loc,
-		"offset": offset,
-	}).Infoln("searching yelp")
+	l.Info("searching yelp for", q, "at", loc, "offset", offset)
 	form := url.Values{
 		"term":     {q},
 		"location": {loc},
